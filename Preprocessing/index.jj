@@ -1,0 +1,409 @@
+/**************************************************************/
+/*File    : index.jj
+/*Author  : Qiuping Pan
+/*Compile : /javacc-5.0/bin/javacc index.jj
+/*          javac -cp "commons-cli-1.3.1.jar" *.java
+/*Run     : java index <Input Dir> <Output Dir>
+/*Query   : java -cp "commons-cli-1.3.1.jar" retrieve -q <String> -d <Dir of Dict and Post files>
+/*
+/************************************************************/
+
+options{
+    STATIC = false;
+    IGNORE_CASE = true;
+}
+
+PARSER_BEGIN(index)
+    import java.io.PrintStream;
+    import java.io.File;
+    import java.io.FileWriter;
+    import java.io.IOException;
+    import java.nio.charset.Charset;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+    import java.util.*;
+
+
+    public class index{
+        public static void main(String[] args) throws ParseException, TokenMgrError{
+            //make sure the number of input arguments should be 2(one input directory and one output directory)
+            if(args.length != 2){
+                System.out.println("The number of parameters should be 2. But now has " + args.length);
+                for(String p: args){
+                    System.out.println(p);
+                }
+                return;
+
+            }
+            //process files
+            Process(args[0], args[1]);
+        }
+
+        private static void Process(String inputdir, String outputdir) throws ParseException, TokenMgrError{
+            HashMap stopwordlist = new HashMap();
+
+            try{
+                String stopfile = "stopwords_en.txt";
+                List<String> lines = Files.readAllLines(Paths.get(stopfile), Charset.defaultCharset());
+                for(String line: lines){
+                    stopwordlist.put(line.trim(), line.trim());
+                }
+            }catch (IOException ex){
+                ex.printStackTrace();
+            }
+
+            //the input folder
+            File folder = new File(inputdir);
+            //the output folder
+            File output = new File(outputdir);
+
+            //if the input folder doesn't exist, report an error
+            if(!folder.isDirectory()){
+                System.out.println("This path does not exist or it is not a directory. " + inputdir);
+                return;
+            }
+
+            //if the output folder doesn't exist, create the folder
+            if(!output.isDirectory()){
+                output.mkdirs();
+            }
+
+            //read all the files within the input folder
+            File[] listOfFiles = folder.listFiles();
+
+            //initial one hashtable to save all tokens and their frequency
+            HashTable table = new HashTable(122062);
+
+            //local hashtable
+            HashMap map = new HashMap();
+
+            //mapping file
+            ArrayList<String> mapping = new ArrayList<String>();
+
+            //deal with all the files under the input folder
+            for(File file: listOfFiles){
+                if(file.isFile()){
+                    //get the filename of the current file
+                    String inputfile = file.getName();
+                    //get the path of the current file
+                    String path = file.getPath();
+
+                    try {
+                        // initialize the tokenizer
+                        index parser = new index(new java.io.FileInputStream(path));
+
+                        //initial an array to save the tokens extracted from file
+                        ArrayList<String> lst = new ArrayList<String>();
+
+                        //tokenize the file, return the total number of tokens of this document
+                        int total = parser.Start(map, stopwordlist, System.out);
+
+                        //add to mapping file
+                        mapping.add(inputfile);
+
+                        //copy local hash table to global hash table
+                        Copy2Global(map, table, mapping.size() - 1, total);
+
+                    }catch(java.io.FileNotFoundException e){
+                        System.out.println(path + " not found.");
+                        return ;
+                    }
+                }
+            }
+            writeDOcFixLength(table, mapping, output);
+        }
+
+        private static void Copy2Global(HashMap map, HashTable global, int docid, int numTokens){
+            Set<String> keys = map.keySet();
+            for(String key: keys){
+                // calculate the rtf for each term
+                double f = (int)map.get(key) / (double)numTokens;
+                // If token exists in global hashtable, update the numdoc and posting. otherwise, insert to global
+                if(global.containsKey(key)){
+                    Entity entity = (Entity)global.getName(key);
+                    entity.AddDocument(docid, f, (int)map.get(key));
+                }else {
+                    Entity entity = new Entity(docid, f, (int)map.get(key));
+                    global.insert(key, entity);
+                }
+            }
+            map.clear();
+        }
+
+        private static void writeDOcFixLength(HashTable global, ArrayList<String> mapping, File folder){
+            int NumberDoc = mapping.size();
+            try
+            {
+                //writing mapping file with fixed length 8
+                File file = new File(folder, "mapping.txt");
+                FileWriter fwriter=new FileWriter(file);
+                for(int i = 0; i< mapping.size(); i++){
+                    fwriter.write(formatString(mapping.get(i), 8) + "\n");
+                }
+                fwriter.close();
+
+                file = new File(folder, "dict.txt");
+                fwriter = new FileWriter(file);
+
+                File postfile = new File(folder, "post.txt");
+                FileWriter writer = new FileWriter(postfile);
+
+                int starts = 0;
+                List<Document> docs;
+                for(int i=0; i< global.getSize(); i++){
+                    String key = global.getNode(i).getAddr();
+                    if(!key.equals("")){
+                        Entity entity = (Entity)global.getName(key);
+                        int Term_frequency = entity.Term_frequency;
+
+                        // deal with low frequency words
+                        // if raw term frequency is lower than 2, then replace with "DELETED"
+                        if(Term_frequency > 1) {
+                            int value = entity.Number_Doc;
+                            fwriter.write(formatString(key, 10) + " " + formatString(String.valueOf(value), 5) + " " + formatString(String.valueOf(starts), 8) + "\n");
+                            starts += value;
+                            docs = entity.documents;
+
+                            double idf = Math.log((double) NumberDoc / docs.size());
+
+                            for (Document doc : docs) {
+                                writer.write(formatString(String.valueOf(doc.Document_id), 5) + " " + formatString(String.valueOf(doc.term_frequency * idf * 100), 4) + "\n");
+                            }
+                        }
+                        else {
+                            fwriter.write(formatString("DELETED", 25) + "\n");
+                        }
+                    }
+                    else{
+                        fwriter.write(formatString("", 25) + "\n");
+                    }
+                }
+                fwriter.close();
+                writer.close();
+            }
+            catch(IOException e)
+            {
+                System.err.println("IOEror: "+e.getMessage());
+            }
+        }
+
+        private static String formatString(String value, int length){
+            if(value.length() > length){
+                return value.substring(0, length);
+            }else {
+                String format = "%1$-" + length + "s";
+                return String.format(format, value);
+            }
+
+        }
+
+
+        private static class Entity{
+            public int Number_Doc;
+            public int Term_frequency;
+            public List<Document> documents;
+
+            public Entity(int document, double frequency, int term_frequency){
+                Number_Doc = 1;
+                documents = new ArrayList<Document>();
+                documents.add(new Document(document, frequency));
+                Term_frequency = term_frequency;
+            }
+
+            public void AddDocument(int doc, double frequency, int term_frequency){
+                Number_Doc++;
+                Term_frequency += term_frequency;
+                documents.add(new Document(doc, frequency));
+
+            }
+        }
+
+        private static class Document{
+            public int Document_id;
+            public double term_frequency;
+
+            public Document(int id, double frequency){
+                Document_id = id;
+                term_frequency = frequency;
+            }
+
+        }
+
+    }
+
+
+PARSER_END(index)
+
+
+SKIP : { "\n" | "\r" | "\r\n"| " " }
+SKIP : { "." | "," | ";" | ":" | "?" | "!" | "$" | "%" | "(" | ")" | "*" | "^" | "@" | "<<" }
+
+SKIP : { < FLOATING_POINT_LITERAL:
+                (["0"-"9"])+ "." (["0"-"9"])* (<EXPONENT>)? (["f","F","d","D"])?
+              | "." (["0"-"9"])+ (<EXPONENT>)? (["f","F","d","D"])?
+              | (["0"-"9"])+ <EXPONENT> (["f","F","d","D"])?
+              | (["0"-"9"])+ (<EXPONENT>)? ["f","F","d","D"]
+          >
+        |
+          < #EXPONENT: ["e","E"] (["+","-"])? (["0"-"9"])+ > }
+
+
+TOKEN: {< #DIGITS: (["0" - "9"])+ >}
+TOKEN: {< PLURAL2: (<LETTER>)+("sses"){1} >}
+TOKEN: {< EXCEPT: (<LETTER>)+("ss"| "us"){1} >}
+TOKEN: {< VERB: (<LETTER>)+("'s" | "s'"){1} >}
+TOKEN: {< REPLACE: (<LETTER>)+("ied"|"ies"){1} >}
+TOKEN: {< PLURAL: (<LETTER>)+(<NON_VOWEL>"s"){1} >}
+
+TOKEN: {< PAST: (<VOWEL>){1}(<NON_VOWEL>){1}(<LETTER>)*("eedly" | "eed"){1} >}
+TOKEN: {< REPLACE2: (<NON_VOWEL>)*(<VOWEL>)+(<LETTER>)*("ed"|"edly"|"ing"|"ingly"){1} >}
+TOKEN: {< STOPPING: (<LETTER>)+"'"(<LETTER>)+>}
+
+TOKEN: {< STRING:  (<WORDS>)+>}
+TOKEN: {< #WORDS: ["A"-"Z", "a" - "z", "0"-"9"] >}
+
+TOKEN: {< #VOWEL: ["A", "E", "I", "O", "U", "a", "e", "i", "o", "u"]>}
+TOKEN: {< #NON_VOWEL: ["b", "c", "d", "f", "g", "h", "j", "k", "l", "m", "n", "p", "q", "r", "s", "t", "v", "w", "x", "y", "z"] >}
+TOKEN: {< #LETTER: ["A" - "Z", "a" - "z"]>}
+
+
+SKIP: { "-" | "/" | "\\" | "_" }
+
+SKIP :{ "<" : IN_HTML_TAG }
+
+<IN_HTML_TAG>
+SKIP:{">" : DEFAULT }
+
+<IN_HTML_TAG>
+MORE:{ < ~[] > }
+
+TOKEN: {<OTHER: ~[]>}
+
+
+int Start(HashMap map, HashMap stopwordlist, PrintStream printStream):
+{
+    Token t;
+    String key = null;
+    int val;
+    int total = 0;
+
+}
+{
+    (
+        ( t = <STRING> | t = <EXCEPT> )
+        {
+            //convert token to lowercase
+            key = t.image.toLowerCase();
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        t = <PLURAL>
+        {
+            key = t.image.toLowerCase();
+
+            //if the token is plural, then remove the 's'
+            key = key.substring(0, key.length() - 1);
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        (t = <VERB> | t = <PLURAL2>)
+        {
+            key = t.image.toLowerCase();
+
+            //if the token ends with 's or s' to display verb, then remove them
+            //if the token ends with 'sses', then remove 'es'
+            key = key.substring(0, key.length() - 2);
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        t = <PAST>
+        {
+            key = t.image.toLowerCase();
+            //if one token starts with one vowel and follow one non-vowel, also it ends with 'eed' or 'eedly'.
+            //it means this token should have more than 5 characters
+            //then remove 'eed' or 'eedly' to 'ee'
+            if(key.length() > 5){
+                key = key.replaceAll("(eedly|eed)$", "ee");
+            }
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        t = <REPLACE>
+        {
+            key = t.image.toLowerCase();
+            //replace 'ied' or 'ies' to 'ie' when the token is less than 5 characters, otherwise replace to 'i'
+            String param = key.length() < 5 ? "ie" : "i";
+            key = key.replaceAll("(ied|ies)$",param);
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        t = <REPLACE2>
+        {
+            key = t.image.toLowerCase();
+            if(key.length() > 4){
+
+                //remove 'ed', 'edly', 'ing', 'ingly' when the token contains one vowel and longer than 4.
+                key = key.replaceAll("(ed|edly|ing|ingly)$", "");
+
+                //after removing, if the token ends with 'at', 'bl' or 'iz', then add 'e'
+                if(key.matches("^.+?(at|bl|iz)$")){
+                    key = key + "e";
+                }
+                //or if the token ends with double letter, but not 'll', 'ss' or 'zz', then remove the last letter
+                if(key.substring(key.length()- 2).matches("([a-z])\\1$") && key.matches("^.+?[^ll|ss|zz]$")){
+                    key = key.substring(0, key.length() - 1);
+                }
+            }
+            if(!stopwordlist.containsKey(key)){
+                val = 1;
+                if(map.containsKey(key)){
+                    val += (int)map.get(key);
+                }
+                map.put(key, val);
+                total += 1;
+            }
+        }
+    |
+        t = <OTHER>
+    |   t = <STOPPING>
+    )*
+    <EOF>
+    { return total; }
+}
+
+
