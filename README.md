@@ -7,6 +7,6 @@
 #### Example script to compile:
 ##### javacc index.jj
 ##### javac *.java
-##### java index <inputDir> <outputDir>
+##### java index *inputDir* *outputDir*
 ## Search Engine Web Application
 ### The Dict file, Mapping file, and the Post file generated from last step should be placed to the resources directory. 
