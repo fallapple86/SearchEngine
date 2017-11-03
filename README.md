@@ -12,4 +12,4 @@ To compile the source code, JavaCC is needed, which can be downloaded [here](htt
 > java index *inputDir* *outputDir*
 
 ## Search Engine Web Application
-The Dict file, Mapping file, and the Post file generated from last step should be placed to the resources directory. 
+The Dict file, Mapping file, and the Post file generated from the preprocessing step should be placed to the resources directory. 
